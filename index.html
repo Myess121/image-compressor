@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>博客图片压缩</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #fff; --text: #1f2328; --muted: #6b7280;
+    --border: #e3e5e8; --accent: #2f6feb; --good: #1a7f37; --warn: #b45309;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c; --panel: #1f2228; --text: #e6e8eb; --muted: #9aa1ab;
+      --border: #30343b; --accent: #5b8ff9; --good: #4ac26b; --warn: #f0a646;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.6 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 60px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px; margin-bottom: 16px;
+  }
+
+  /* 拖拽上传区 */
+  #drop {
+    border: 2px dashed var(--border); border-radius: 10px; padding: 28px 16px;
+    text-align: center; cursor: pointer; color: var(--muted); transition: .15s;
+  }
+  #drop.over, #drop:hover { border-color: var(--accent); color: var(--accent); }
+  #drop strong { color: var(--text); }
+
+  /* 设置区 */
+  .settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px 24px; }
+  .field label { display: block; font-weight: 600; margin-bottom: 4px; }
+  .field .hint { color: var(--muted); font-size: 12px; }
+  .field input[type=number], .field select {
+    width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg); color: var(--text); font: inherit;
+  }
+  .field input[type=range] { width: 100%; }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .presets { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  button {
+    font: inherit; padding: 6px 12px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  /* 结果卡片 */
+  .item { display: grid; grid-template-columns: 1fr 260px; gap: 16px; }
+  @media (max-width: 760px) { .item { grid-template-columns: 1fr; } }
+  .item h3 { margin: 0 0 8px; font-size: 15px; word-break: break-all; }
+  .stats { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 13px; }
+  .stats dt { color: var(--muted); }
+  .stats dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .saving { font-size: 22px; font-weight: 700; color: var(--good); margin: 8px 0; }
+  .saving.bad { color: var(--warn); }
+  .note { font-size: 12px; color: var(--warn); margin-top: 6px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+
+  /* 前后对比：两张图叠在一起，拖动竖线切换 */
+  .compare-wrap { position: relative; }
+  .compare {
+    position: relative; overflow: auto; max-height: 70vh; background:
+      repeating-conic-gradient(#8881 0% 25%, transparent 0% 50%) 0 0 / 16px 16px;
+    border-radius: 8px; border: 1px solid var(--border); user-select: none;
+  }
+  .compare .stage { position: relative; margin: 0 auto; }
+  .compare img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
+  .compare .after { clip-path: inset(0 0 0 var(--pos, 50%)); }
+  .compare .line {
+    position: absolute; top: 0; bottom: 0; left: var(--pos, 50%); width: 2px;
+    background: #fff; box-shadow: 0 0 0 1px #0006; pointer-events: none;
+  }
+  .compare .tag {
+    position: absolute; top: 8px; padding: 2px 8px; border-radius: 4px; font-size: 12px;
+    background: #000a; color: #fff; pointer-events: none;
+  }
+  .compare .tag.l { left: 8px; } .compare .tag.r { right: 8px; }
+  .compare-tools { display: flex; gap: 8px; align-items: center; margin-top: 8px; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
+  .compare-tools input[type=range] { flex: 1; min-width: 120px; }
+  .busy { color: var(--muted); padding: 40px; text-align: center; }
+  footer { color: var(--muted); font-size: 12px; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <h1>博客图片压缩</h1>
+  <p class="sub">图片只在你的浏览器里处理，不会上传到任何服务器，断网也能用。</p>
+
+  <div class="panel">
+    <div id="drop">
+      <strong>把图片拖到这里</strong>，或点击选择（可多选，支持 JPG / PNG / WebP）
+      <input id="file" type="file" accept="image/*" multiple hidden>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="settings">
+      <div class="field">
+        <label for="format">输出格式</label>
+        <select id="format">
+          <option value="image/jpeg">JPEG（兼容性最好）</option>
+          <option value="image/webp">WebP（同画质体积更小）</option>
+        </select>
+        <div class="hint">照片选 JPEG 或 WebP 都可以；Hugo 两种都支持。</div>
+      </div>
+      <div class="field">
+        <label for="maxEdge">最长边上限（像素）</label>
+        <input id="maxEdge" type="number" min="0" step="10">
+        <div class="hint">超过就等比缩小，填 0 表示不缩放。博客封面 1920 足够清晰。</div>
+      </div>
+      <div class="field">
+        <label for="quality">画质 <span id="qualityVal"></span></label>
+        <input id="quality" type="range" min="0.3" max="1" step="0.01">
+        <div class="hint">越高越清晰、文件越大。0.8 左右肉眼几乎看不出差别。</div>
+      </div>
+      <div class="field">
+        <label for="target">目标大小上限（KB）</label>
+        <input id="target" type="number" min="0" step="50">
+        <div class="hint">按上面的画质压完仍超过这个大小，才会自动降低画质；填 0 关闭。</div>
+      </div>
+      <div class="field">
+        <label for="minQuality">画质下限 <span id="minQualityVal"></span></label>
+        <input id="minQuality" type="range" min="0.3" max="0.95" step="0.01">
+        <div class="hint">自动降画质时不会低于它；还不够小就改为缩小尺寸，避免糊成一片。</div>
+      </div>
+    </div>
+    <div class="presets">
+      <span style="color:var(--muted);align-self:center">预设：</span>
+      <button data-preset="cover">文章封面</button>
+      <button data-preset="inline">正文插图</button>
+      <button data-preset="hq">高清存档</button>
+    </div>
+  </div>
+
+  <div id="list"></div>
+
+  <div id="batch" class="panel" style="display:none;gap:8px;justify-content:space-between;align-items:center;flex-wrap:wrap">
+    <span id="batchInfo"></span>
+    <span class="row">
+      <button id="clearAll">清空</button>
+      <button id="downloadAll" class="primary">全部下载</button>
+    </span>
+  </div>
+
+  <footer>单文件网页工具 · 用浏览器自带的 Canvas 压缩 · 输出图片不含 EXIF（拍摄地点等信息会被去掉）</footer>
+</main>
+
+<script>
+// ---------- 设置 ----------
+const PRESETS = {
+  cover:  { format: 'image/jpeg', maxEdge: 1920, quality: 0.82, target: 900, minQuality: 0.6 },
+  inline: { format: 'image/jpeg', maxEdge: 1280, quality: 0.8,  target: 400, minQuality: 0.6 },
+  hq:     { format: 'image/jpeg', maxEdge: 2560, quality: 0.9,  target: 0,   minQuality: 0.7 },
+};
+const KEYS = ['format', 'maxEdge', 'quality', 'target', 'minQuality'];
+const $ = id => document.getElementById(id);
+
+function readSettings() {
+  return {
+    format: $('format').value,
+    maxEdge: Math.max(0, +$('maxEdge').value || 0),
+    quality: +$('quality').value,
+    target: Math.max(0, +$('target').value || 0),
+    minQuality: +$('minQuality').value,
+  };
+}
+function applySettings(s) {
+  for (const k of KEYS) $(k).value = s[k];
+  showSliderValues();
+}
+function showSliderValues() {
+  $('qualityVal').textContent = Math.round($('quality').value * 100) + '%';
+  $('minQualityVal').textContent = Math.round($('minQuality').value * 100) + '%';
+}
+
+// 记住上次的设置（只存在本机浏览器里）
+let saved = null;
+try { saved = JSON.parse(localStorage.getItem('img-compress-settings')); } catch {}
+applySettings({ ...PRESETS.cover, ...(saved || {}) });
+
+// ---------- 工具函数 ----------
+const fmtSize = b => b >= 1024 * 1024 ? (b / 1024 / 1024).toFixed(2) + ' MB' : (b / 1024).toFixed(0) + ' KB';
+const extOf = type => type === 'image/webp' ? 'webp' : 'jpg';
+
+function encode(canvas, type, q) {
+  return new Promise(res => canvas.toBlob(res, type, q));
+}
+
+// 把位图画到指定尺寸的画布上
+function draw(bitmap, w, h, type) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  // JPEG 不支持透明，透明部分垫白色，否则会变成黑色
+  if (type === 'image/jpeg') { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); }
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  return c;
+}
+
+// 核心：缩放 → 按画质编码 → 超过目标大小就二分查找画质 → 还不够才继续缩尺寸
+async function compress(bitmap, s) {
+  let scale = 1;
+  const longEdge = Math.max(bitmap.width, bitmap.height);
+  if (s.maxEdge && longEdge > s.maxEdge) scale = s.maxEdge / longEdge;
+
+  const limit = s.target * 1024;
+  const minQ = Math.min(s.minQuality, s.quality);
+  let note = '';
+
+  for (let round = 0; round < 8; round++) {
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = draw(bitmap, w, h, s.format);
+
+    let blob = await encode(canvas, s.format, s.quality);
+    let q = s.quality;
+    if (!limit || blob.size <= limit) return { blob, w, h, q, note };
+
+    // 二分查找：在 [画质下限, 设定画质] 之间找“刚好不超过目标”的最高画质
+    let lo = minQ, hi = s.quality, best = null;
+    for (let i = 0; i < 7 && hi - lo > 0.01; i++) {
+      const mid = (lo + hi) / 2;
+      const b = await encode(canvas, s.format, mid);
+      if (b.size <= limit) { best = { blob: b, q: mid }; lo = mid; } else { hi = mid; }
+    }
+    if (!best) {
+      const b = await encode(canvas, s.format, minQ);
+      if (b.size <= limit) best = { blob: b, q: minQ };
+    }
+    if (best) {
+      if (best.q < s.quality - 0.005) note = `为了不超过 ${s.target} KB，画质自动降到 ${Math.round(best.q * 100)}%`;
+      if (round > 0) note += (note ? '；' : '') + `画质降到下限仍超标，尺寸额外缩小到 ${w}×${h}`;
+      return { blob: best.blob, w, h, q: best.q, note };
+    }
+    scale *= 0.85; // 画质已到下限还太大，只能缩小尺寸
+  }
+  // 极端情况（超大 PNG 等）：返回最后一次结果并提示
+  const w = Math.round(bitmap.width * scale), h = Math.round(bitmap.height * scale);
+  const blob = await encode(draw(bitmap, w, h, s.format), s.format, minQ);
+  return { blob, w, h, q: minQ, note: '已尽力压缩，但仍超过目标大小，可以适当调高目标或降低尺寸' };
+}
+
+// ---------- 列表与界面 ----------
+const items = []; // { id, file, bitmap, origUrl, result, outUrl, el }
+let seq = 0;
+
+async function addFiles(files) {
+  for (const file of files) {
+    if (!file.type.startsWith('image/')) continue;
+    const item = { id: ++seq, file, origUrl: URL.createObjectURL(file) };
+    item.el = document.createElement('div');
+    item.el.className = 'panel';
+    item.el.innerHTML = `<div class="busy">正在读取 ${escapeHtml(file.name)}…</div>`;
+    $('list').append(item.el);
+    items.push(item);
+    try {
+      // imageOrientation: 按照片里的 EXIF 方向摆正（手机竖拍照片不会变横）
+      item.bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    } catch {
+      item.el.innerHTML = `<div class="busy">无法读取 ${escapeHtml(file.name)}。` +
+        `如果是 iPhone 的 HEIC 格式，请先在手机里改成“兼容性最佳”或转成 JPG。</div>`;
+      continue;
+    }
+    await process(item);
+  }
+  updateBatch();
+}
+
+async function process(item) {
+  if (!item.bitmap) return;
+  const s = readSettings();
+  const token = (item.token = Symbol());
+  const result = await compress(item.bitmap, s);
+  if (token !== item.token) return; // 设置又变了，丢弃过期结果
+  if (item.outUrl) URL.revokeObjectURL(item.outUrl);
+  item.result = result;
+  item.format = s.format;
+  item.outUrl = URL.createObjectURL(result.blob);
+  render(item);
+  updateBatch();
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function outName(item) {
+  const base = item.file.name.replace(/\.[^.]+$/, '');
+  return `${base}-min.${extOf(item.format)}`;
+}
+
+function render(item) {
+  const { file, bitmap, result } = item;
+  const ratio = result.blob.size / file.size;
+  const pct = Math.round((1 - ratio) * 100);
+  const keepView = item.el.querySelector('.compare-tools');
+  const pos = keepView ? keepView.querySelector('.pos').value : 50;
+  const zoom = keepView ? keepView.querySelector('.zoom').value : 'fit';
+
+  item.el.innerHTML = `
+    <div class="item">
+      <div class="compare-wrap">
+        <div class="compare">
+          <div class="stage">
+            <img class="before" src="${item.origUrl}" alt="原图">
+            <img class="after" src="${item.outUrl}" alt="压缩后">
+            <div class="line"></div>
+          </div>
+          <span class="tag l">原图</span><span class="tag r">压缩后</span>
+        </div>
+        <div class="compare-tools">
+          <span>左原图 ↔ 右压缩后</span>
+          <input class="pos" type="range" min="0" max="100" value="${pos}">
+          <select class="zoom">
+            <option value="fit">适应窗口</option>
+            <option value="1">100%（看细节）</option>
+            <option value="2">200%</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <h3>${escapeHtml(file.name)}</h3>
+        <div class="saving ${ratio >= 1 ? 'bad' : ''}">${ratio >= 1 ? '没有变小' : '减小 ' + pct + '%'}</div>
+        <dl class="stats">
+          <dt>原图</dt><dd>${fmtSize(file.size)} · ${bitmap.width}×${bitmap.height}</dd>
+          <dt>压缩后</dt><dd>${fmtSize(result.blob.size)} · ${result.w}×${result.h}</dd>
+          <dt>实际画质</dt><dd>${Math.round(result.q * 100)}% · ${extOf(item.format).toUpperCase()}</dd>
+        </dl>
+        ${result.note ? `<div class="note">${escapeHtml(result.note)}</div>` : ''}
+        ${ratio >= 1 ? `<div class="note">原图已经很小了，建议直接用原图。</div>` : ''}
+        <div class="actions">
+          <button class="primary dl">下载</button>
+          <button class="rm">移除</button>
+        </div>
+      </div>
+    </div>`;
+
+  const cmp = item.el.querySelector('.compare');
+  const stage = item.el.querySelector('.stage');
+  const posInput = item.el.querySelector('.pos');
+  const zoomSel = item.el.querySelector('.zoom');
+  zoomSel.value = zoom;
+
+  const setPos = v => cmp.style.setProperty('--pos', v + '%');
+  const layout = () => {
+    // 两张图都按“压缩后尺寸”显示，这样才能逐像素对齐比较
+    const z = zoomSel.value;
+    let w, h;
+    if (z === 'fit') {
+      const maxW = cmp.clientWidth, maxH = window.innerHeight * 0.7 - 2;
+      const k = Math.min(maxW / result.w, maxH / result.h, 1);
+      w = result.w * k; h = result.h * k;
+    } else {
+      w = result.w * z; h = result.h * z;
+    }
+    stage.style.width = w + 'px'; stage.style.height = h + 'px';
+  };
+  setPos(pos); layout();
+  item.layout = layout;
+
+  posInput.oninput = () => setPos(posInput.value);
+  zoomSel.onchange = layout;
+  // 在图上按住拖动也能移动分割线
+  const dragTo = e => {
+    const r = stage.getBoundingClientRect();
+    const v = Math.min(100, Math.max(0, (e.clientX - r.left) / r.width * 100));
+    posInput.value = v; setPos(v);
+  };
+  cmp.onpointerdown = e => { if (zoomSel.value === 'fit') { dragTo(e); cmp.setPointerCapture(e.pointerId); } };
+  cmp.onpointermove = e => { if (cmp.hasPointerCapture(e.pointerId)) dragTo(e); };
+
+  item.el.querySelector('.dl').onclick = () => download(item);
+  item.el.querySelector('.rm').onclick = () => remove(item);
+}
+
+function download(item) {
+  const a = document.createElement('a');
+  a.href = item.outUrl; a.download = outName(item);
+  document.body.append(a); a.click(); a.remove();
+}
+
+function remove(item) {
+  URL.revokeObjectURL(item.origUrl);
+  if (item.outUrl) URL.revokeObjectURL(item.outUrl);
+  item.bitmap?.close();
+  item.el.remove();
+  items.splice(items.indexOf(item), 1);
+  updateBatch();
+}
+
+function updateBatch() {
+  const done = items.filter(i => i.result);
+  $('batch').style.display = done.length < 1 ? 'none' : 'flex';
+  const before = done.reduce((a, i) => a + i.file.size, 0);
+  const after = done.reduce((a, i) => a + i.result.blob.size, 0);
+  $('batchInfo').textContent = `共 ${done.length} 张：${fmtSize(before)} → ${fmtSize(after)}`;
+}
+
+// ---------- 事件 ----------
+const drop = $('drop');
+drop.onclick = () => $('file').click();
+$('file').onchange = e => { addFiles([...e.target.files]); e.target.value = ''; };
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); addFiles([...e.dataTransfer.files]); };
+// 页面任意位置粘贴截图也可以
+window.addEventListener('paste', e => {
+  const files = [...e.clipboardData.files].filter(f => f.type.startsWith('image/'));
+  if (files.length) addFiles(files);
+});
+
+let timer;
+function onSettingsChange() {
+  showSliderValues();
+  try { localStorage.setItem('img-compress-settings', JSON.stringify(readSettings())); } catch {}
+  clearTimeout(timer);
+  timer = setTimeout(() => items.forEach(process), 300); // 停止拖动 0.3 秒后再重新压缩
+}
+for (const k of KEYS) $(k).addEventListener('input', onSettingsChange);
+document.querySelectorAll('[data-preset]').forEach(b => b.onclick = () => {
+  applySettings(PRESETS[b.dataset.preset]); onSettingsChange();
+});
+
+$('downloadAll').onclick = async () => {
+  for (const item of items.filter(i => i.result)) {
+    download(item);
+    await new Promise(r => setTimeout(r, 300)); // 稍作间隔，避免浏览器拦截连续下载
+  }
+};
+$('clearAll').onclick = () => [...items].forEach(remove);
+window.addEventListener('resize', () => items.forEach(i => i.layout?.()));
+</script>
+</body>
+</html>
